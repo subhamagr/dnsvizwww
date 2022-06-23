@@ -27,7 +27,10 @@
 #
 
 import datetime
-import StringIO
+import typing as t
+
+import io
+
 import struct
 
 import dns.edns, dns.exception, dns.flags, dns.message, dns.name, dns.rcode, dns.rdataclass, dns.rdata, dns.rdatatype, dns.resolver, dns.rrset
@@ -37,18 +40,14 @@ from django.core.cache import cache as Cache
 from django.core.validators import validate_comma_separated_integer_list
 from django.db import models
 from django.db.models import Q
-from django.utils.html import escape
-from django.utils.timezone import now, utc
 
 import dnsviz.analysis
 import dnsviz.format as fmt
 from dnsviz.ipaddr import IPAddr
 import dnsviz.query as Query
-import dnsviz.resolver as Resolver
 import dnsviz.response as Response
 
-import fields
-import util
+from dnsvizwww import util, fields
 
 MAX_TTL = 100000000
 
@@ -195,6 +194,7 @@ class DomainNameAnalysisManager(models.Manager):
         except self.model.DoesNotExist:
             return None
 
+
 class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models.Model):
     name = fields.DomainNameField(max_length=2048)
     stub = models.BooleanField(default=False)
@@ -253,7 +253,7 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
             else:
                 # If only args were supplied, then this could match __init__()
                 # for either parent.
-                if isinstance(args[0], (int, long)):
+                if isinstance(args[0], int):
                     # In the case of models.Model, the first argument would be int,
                     # for the 'id' field.
 
@@ -304,6 +304,9 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
     def __unicode__(self):
         return fmt.humanize_name(self.name, True)
 
+    def __hash__(self):
+        return hash(self.name)
+
     class Meta:
         unique_together = (('name', 'analysis_end'), ('name', 'group'))
         get_latest_by = 'analysis_end'
@@ -334,7 +337,7 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
     def to_text(self):
         return fmt.humanize_name(self.name)
 
-    def timestamp_url_encoded(self):
+    def timestamp_url_encoded(self) -> str:
         return util.datetime_url_encode(self.analysis_end)
 
     def updated_ago_str(self):
@@ -467,7 +470,8 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
         # delegation used in this analysis.
         if self.group is None:
             # store the latest pk associated with the name
-            Cache.set('dnsvizwww.models.OnlineDomainNameAnalysis.name.%s.latest.pk' % (util.uuid_for_name(self.name).hex), self.pk)
+            Cache.set('dnsvizwww.models.OnlineDomainNameAnalysis.name.%s.latest.pk' % (
+                util.uuid_for_name(self.name).hex), self.pk)
 
     def _store_related_cache(self, level):
         d = {}
@@ -493,7 +497,7 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
                     edns_flags = query.edns_flags
                     edns_options = b''
                     for opt in query.edns_options:
-                        s = StringIO.StringIO()
+                        s = io.BytesIO()
                         opt.to_wire(s)
                         data = s.getvalue()
                         edns_options += struct.pack('!HH', opt.otype, len(data)) + data
@@ -608,7 +612,7 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
         for response in query.responses.all():
             history = []
             if response.history_serialized:
-                history_vals = map(int, response.history_serialized.split(','))
+                history_vals = list(map(int, response.history_serialized.split(',')))
 
                 for i in range(0, len(history_vals), 5):
                     response_time = history_vals[i]/1000.0
@@ -893,14 +897,17 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
         refresh_offset = util.uuid_for_name(self.name).int % refresh_interval
         dname_obj.set_refresh(refresh_interval, refresh_offset)
 
+
 class OfflineDomainNameAnalysis(OnlineDomainNameAnalysis):
     QUERY_CLASS = Query.MultiQueryAggregateDNSResponse
 
     class Meta:
         proxy = True
 
+
 class ResourceRecordManager(models.Manager):
     pass
+
 
 class ResourceRecord(models.Model):
     name = fields.DomainNameField(max_length=2048)
@@ -924,7 +931,7 @@ class ResourceRecord(models.Model):
 
     def _set_rdata(self, rdata):
         self._rdata = rdata
-        wire = StringIO.StringIO()
+        wire = io.BytesIO()
         rdata.to_wire(wire)
         self.rdata_wire = wire.getvalue()
         for name, value in self.rdata_extra_field_params(rdata).items():
@@ -1117,6 +1124,8 @@ class DNSResponse(models.Model):
 
     msg_size = fields.UnsignedSmallIntegerField(blank=True, null=True)
 
+    _message: t.Optional[dns.message.Message]
+
     def __init__(self, *args, **kwargs):
         super(DNSResponse, self).__init__(*args, **kwargs)
         self._message = None
@@ -1143,7 +1152,7 @@ class DNSResponse(models.Model):
         for index, rrset in enumerate(section):
             rr_cls = ResourceRecord.objects.model_for_rdtype(rrset.rdtype)
             for rr in rrset:
-                sio = StringIO.StringIO()
+                sio = io.BytesIO()
                 rr.to_wire(sio)
                 rdata_wire = sio.getvalue()
                 params = dict(rr_cls.rdata_extra_field_params(rr).items())
@@ -1201,7 +1210,7 @@ class DNSResponse(models.Model):
             self.edns_flags = message.ednsflags
             self.edns_options = b''
             for opt in message.options:
-                s = StringIO.StringIO()
+                s = io.BytesIO()
                 opt.to_wire(s)
                 data = s.getvalue()
                 self.edns_options += struct.pack('!HH', opt.otype, len(data)) + data
@@ -1224,8 +1233,10 @@ class DNSResponse(models.Model):
             # response has not been set yet or is invalid
             if self.flags is None:
                 return None
+
             #XXX generate a queryid, rather than using 0
             self._message = dns.message.Message(0)
+
             self._message.flags = self.flags
 
             if self.has_question:
@@ -1239,14 +1250,16 @@ class DNSResponse(models.Model):
                 self._message.question.append(dns.rrset.RRset(qname, qrdclass, qrdtype))
 
             if self.edns_max_udp_payload is not None:
-                self._message.use_edns(self.edns_flags>>16, self.edns_flags, self.edns_max_udp_payload, 65536)
+                options = []
                 index = 0
                 while index < len(self.edns_options):
                     (otype, olen) = struct.unpack('!HH', self.edns_options[index:index + 4])
                     index += 4
                     opt = dns.edns.option_from_wire(otype, self.edns_options, index, olen)
-                    self._message.options.append(opt)
+                    options.append( opt)
                     index += olen
+
+                self._message.use_edns(self.edns_flags>>16, self.edns_flags, self.edns_max_udp_payload, 65536, options=options)
 
             self._export_sections(self._message)
 

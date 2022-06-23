@@ -27,41 +27,56 @@
 #
 
 import base64
-from cgi import escape
+import hashlib
+from html import escape
 import json
 import logging
 import struct
-import urllib
-import urllib2
 import uuid
+import urllib.parse
+from datetime import datetime
 
-import dns.dnssec, dns.name, dns.rdatatype, dns.rdataclass
+import urllib.request
+import urllib.error
+
+import dns.dnssec
+import dns.name
+import dns.rdatatype
+import dns.rdataclass
+from dnsviz.format import humanize_name, DNSKEY_FLAGS
 
 from django.conf import settings
 from django.core.cache.backends.base import DEFAULT_TIMEOUT
 
 import dnsviz.format as fmt
 
-def datetime_url_encode(dt):
+
+def datetime_url_encode(dt: datetime) -> str:
     timestamp = int(fmt.datetime_to_timestamp(dt))
-    return base64.urlsafe_b64encode(struct.pack('!L',int(timestamp)))[:-2]
+    return base64.urlsafe_b64encode(struct.pack('!L', int(timestamp))).decode()[:-2]
+
 
 def datetime_url_decode(timestamp):
     timestamp = struct.unpack('!L', base64.urlsafe_b64decode(str(timestamp+'==')))[0]
     return fmt.timestamp_to_datetime(timestamp)
 
+
 def name_url_encode(name):
     if name == dns.name.root:
         return 'root'
-    return urllib.quote(name.canonicalize().to_text().rstrip('.').replace('/', 'S'), safe='')
+    return urllib.parse.quote(name.canonicalize().to_text().rstrip('.').replace('/', 'S'), safe='')
+
 
 def name_url_decode(name):
     if name == 'root':
         return dns.name.root
+
     try:
         return dns.name.from_text(name.replace('S', '/'), dns.name.root)
-    except (UnicodeEncodeError, dns.name.FormError) as e:
+
+    except (UnicodeEncodeError, dns.name.FormError):
         return None
+
 
 def rr_to_html(name, rdclass, rdtype, ttl, rdata):
     s = '<tr class="rr"><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>' % (name, ttl, dns.rdataclass.to_text(rdclass), dns.rdatatype.to_text(rdtype))
@@ -72,11 +87,12 @@ def rr_to_html(name, rdclass, rdtype, ttl, rdata):
         else:
             protocol = rdata.protocol
         s += '<abbr title="Flags: %s">%d</abbr> <abbr title="Protocol: %s">%d</abbr> <abbr title="Algorithm: %s">%d</abbr> <abbr title="Key:">%s</abbr> ; id = %d' % \
-                (' '.join(flags), rdata.flags, protocol, rdata.protocol, dns.dnssec.algorithm_to_text(rdata.algorithm), rdata.algorithm, base64.b64encode(rdata.key), dnssec.key_tag(rdata))
+                (' '.join(flags), rdata.flags, protocol, rdata.protocol, dns.dnssec.algorithm_to_text(rdata.algorithm), rdata.algorithm, base64.b64encode(rdata.key), rdata.key_tag(rdata))
     else:
         s += escape(rdata.to_text(), quote=True)
     s += '</td></tr>'
     return s
+
 
 def target_for_rrset(rrset, section, rdata=None):
     target = '%s-%s-%d' % (section.lower()[:3], humanize_name(rrset.name), rrset.rdtype)
@@ -88,8 +104,16 @@ def target_for_rrset(rrset, section, rdata=None):
         target += '-%s' % m.hexdigest()
     return target
 
-def ip_name_cmp((addr1, namelist1), (addr2, namelist2)):
+
+def cmp(a, b):
+    return (a > b) - (a < b)
+
+
+def ip_name_cmp(d1, d2):
+    addr1, namelist1 = d1
+    addr2, namelist2 = d2
     return cmp((namelist1[0], addr1), (namelist2[0], addr2))
+
 
 def touch_cache(cache, key, timeout=DEFAULT_TIMEOUT, version=None):
     try:
@@ -99,23 +123,29 @@ def touch_cache(cache, key, timeout=DEFAULT_TIMEOUT, version=None):
     else:
         cache._cache.touch(cache.make_key(key, version=version), cache.get_backend_timeout(timeout))
 
+
 def uuid_for_name(name):
     return uuid.uuid5(uuid.NAMESPACE_DNS, name.canonicalize().to_text())
+
 
 def validate_captcha(response):
     logger = logging.getLogger('django.request')
     try:
         data = (('secret', settings.CAPTCHA_SECRET), ('response', response))
-        f = urllib2.urlopen('https://www.google.com/recaptcha/api/siteverify', data=urllib.urlencode(data))
-    except urllib2.URLError:
+        f = urllib.request.urlopen(f'https://www.google.com/recaptcha/api/siteverify?{urllib.parse.urlencode(data)}')
+
+    except urllib.error.URLError:
         logger.exception('Error validating captcha')
         return False
+
     try:
         v = json.loads(f.read())
+
     except ValueError:
         logger.exception('Error validating captcha')
         return False
-    if v.get('success'):
+
+    if v.get('success', False):
         return True
-    else:
-        return False
+
+    return False

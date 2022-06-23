@@ -30,10 +30,10 @@ import dns.name
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy
 
 class UnsignedSmallIntegerField(models.SmallIntegerField):
-    def from_db_value(self, value, expression, connection, context):
+    def from_db_value(self, value, expression, connection, context=None):
         return self.to_python(value)
 
     def to_python(self, value):
@@ -53,7 +53,7 @@ class UnsignedSmallIntegerField(models.SmallIntegerField):
         return value
 
 class UnsignedIntegerField(models.IntegerField):
-    def from_db_value(self, value, expression, connection, context):
+    def from_db_value(self, value, expression, connection, context=None):
         return self.to_python(value)
 
     def to_python(self, value):
@@ -73,13 +73,13 @@ class UnsignedIntegerField(models.IntegerField):
         return value
 
 class DomainNameField(models.CharField):
-    description = _("Domain name (with maximum length of %(max_length)s characters)")
+    description = gettext_lazy("Domain name (with maximum length of %(max_length)s characters)")
 
     def __init__(self, *args, **kwargs):
         self.canonicalize = kwargs.pop('canonicalize', True)
         super(DomainNameField, self).__init__(*args, **kwargs)
 
-    def from_db_value(self, value, expression, connection, context):
+    def from_db_value(self, value, expression, connection, context=None):
         return self.to_python(value)
 
     def to_python(self, value):
@@ -90,7 +90,7 @@ class DomainNameField(models.CharField):
         else:
             try:
                 name = dns.name.from_text(value)
-            except Exception, e:
+            except Exception as e:
                 raise ValidationError('%s: %s is of type %s' % (e, value, type(value)))
         if self.canonicalize:
             name = name.canonicalize()

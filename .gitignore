@@ -5,3 +5,7 @@
 /build/
 /dist/
 .DS_Store
+
+.idea
+.vscode
+**/*.sqlite3

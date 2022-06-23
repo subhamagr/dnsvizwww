@@ -36,10 +36,12 @@ from django.db import DatabaseError, transaction
 
 import dnsviz.analysis
 import dnsviz.format as fmt
-from models import DomainName, OnlineDomainNameAnalysis, OfflineDomainNameAnalysis
+
+from dnsvizwww.models import DomainName, OnlineDomainNameAnalysis, OfflineDomainNameAnalysis
 
 MIN_ANALYSIS_INTERVAL = 14400
 MAX_ANALYSIS_TIME = 300
+
 
 class Analyst(dnsviz.analysis.Analyst):
     qname_only = False
@@ -112,15 +114,16 @@ class Analyst(dnsviz.analysis.Analyst):
             rdtype = filter(lambda x: x[0] == name_obj.name, name_obj.queries.keys())[0][1]
 
         # whether this object is the nxdomain_ancestor of the name in question
-        is_nxdomain_ancestor = \
-                name_obj.nxdomain_ancestor is None and \
-                rdtype is not None and \
+        is_nxdomain_ancestor = (
+                name_obj.nxdomain_ancestor is None and
+                rdtype is not None and
                 name_obj.queries[(name_obj.name, rdtype)].is_nxdomain_all()
+        )
 
-        if not (name_obj.ttl_mapping or \
-                name_obj.name == self.name or \
-                name_obj.name in self._cname_chain or \
-                (self._ask_tlsa_queries(self.name) and len(name_obj.name) == len(self.name) - 2) or \
+        if not (name_obj.ttl_mapping or
+                name_obj.name == self.name or
+                name_obj.name in self._cname_chain or
+                (self._ask_tlsa_queries(self.name) and len(name_obj.name) == len(self.name) - 2) or
                 is_nxdomain_ancestor):
             return
 
@@ -147,7 +150,7 @@ class Analyst(dnsviz.analysis.Analyst):
                     with transaction.atomic():
                         name_obj.save_all(group_initial)
                         name_obj.set_group(force_group, self.explicit_delegations)
-                except Exception, e:
+                except Exception as e:
                     # retry if this is a database error and we tried
                     # less than three times
                     if isinstance(e, DatabaseError) and attempts <= 2:
@@ -156,7 +159,7 @@ class Analyst(dnsviz.analysis.Analyst):
                         raise
                 else:
                     break
-                time.sleep(random.randint(1,2000)/1000.0)
+                time.sleep(random.randint(1, 2000)/1000.0)
                 
         self.analysis_cache[name_obj.name] = name_obj
 
@@ -280,6 +283,7 @@ class Analyst(dnsviz.analysis.Analyst):
             return True
 
         return False
+
 
 class RecursiveAnalyst(dnsviz.analysis.RecursiveAnalyst, Analyst):
     _get_name_for_analysis = dnsviz.analysis.RecursiveAnalyst._get_name_for_analysis

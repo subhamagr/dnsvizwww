@@ -27,7 +27,7 @@
 #
 
 import logging
-import Queue
+import queue as Queue
 
 from django.utils.html import escape
 

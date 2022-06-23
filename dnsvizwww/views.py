@@ -26,52 +26,66 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-from cgi import escape
 import codecs
 import collections
-import datetime
 import hashlib
 import json
+import functools
 import logging
 import os
 import random
 import re
 import struct
 import tempfile
-import urllib
+import typing as t
+import urllib.parse
+from datetime import datetime
+from html import escape
 
-import dns.name, dns.rdataclass, dns.rdatatype, dns.rdtypes.ANY.NS, dns.rdtypes.IN.A, dns.rdtypes.IN.AAAA, dns.rrset
+
+import dns.name
+import dns.rdataclass
+import dns.rdatatype
+import dns.rdtypes.ANY.NS
+import dns.rdtypes.IN.A
+import dns.rdtypes.IN.AAAA
+import dns.rrset
 
 from django.conf import settings
-from django.http import HttpResponse, StreamingHttpResponse, HttpResponseRedirect, Http404
+from django.http import HttpRequest, HttpResponse, StreamingHttpResponse, HttpResponseRedirect, Http404
 from django.shortcuts import render
-from django.template import RequestContext
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 
-from dnsviz.analysis import status as Status, Analyst as _Analyst, OfflineDomainNameAnalysis as _OfflineDomainNameAnalysis, DNS_RAW_VERSION
-from dnsviz.analysis.online import WILDCARD_EXPLICIT_DELEGATION, ANALYSIS_TYPE_AUTHORITATIVE, ANALYSIS_TYPE_RECURSIVE, analysis_types
-from dnsviz.config import DNSVIZ_SHARE_PATH
 import dnsviz.format as fmt
 import dnsviz.response as Response
+from dnsviz.analysis import status as Status, Analyst as _Analyst, OfflineDomainNameAnalysis as _OfflineDomainNameAnalysis, DNS_RAW_VERSION
+from dnsviz.analysis.online import WILDCARD_EXPLICIT_DELEGATION, analysis_types
+from dnsviz.config import DNSVIZ_SHARE_PATH
 from dnsviz import transport
 from dnsviz.util import get_default_trusted_keys
-from django.views.decorators.cache import cache_page
 from dnsviz.viz.dnssec import DNSAuthGraph
+from dnsviz.analysis.online import ANALYSIS_TYPE_AUTHORITATIVE
 
-from dnsvizwww.analysis import Analyst, RecursiveAnalyst, OfflineDomainNameAnalysis
-from dnsvizwww import log
-from dnsvizwww import util
 
-import urls
-from forms import *
-from notices import get_notices, notices_to_javascript
+from dnsvizwww import urls, util, log
+from dnsvizwww.analysis import Analyst, RecursiveAnalyst
+from dnsvizwww.forms import ContactForm, domain_date_search_form, get_dnssec_options_form_data, domain_analysis_form
+from dnsvizwww.models import OfflineDomainNameAnalysis
+from dnsvizwww.notices import get_notices, notices_to_javascript
+
+
+def is_ajax(request: HttpRequest) -> bool:
+    return request.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest'
+
 
 class DynamicAnalyst(_Analyst):
     analysis_model = _OfflineDomainNameAnalysis
 
+
 def reset_query_string(request):
     return HttpResponseRedirect(request.path)
+
 
 class DomainNameView(View):
     def get(self, request, name, timestamp=None, url_subdir='', **kwargs):
@@ -112,6 +126,7 @@ class DomainNameView(View):
     def _get(self, request, name_obj, timestamp, url_subdir, date_form, **kwargs):
         raise Http404
 
+
 class DomainNameSimpleView(View):
     def get(self, request, name, timestamp=None, url_subdir='', **kwargs):
         name = util.name_url_decode(name)
@@ -133,6 +148,7 @@ class DomainNameSimpleView(View):
 
     def _get(self, request, name_obj, timestamp, url_subdir, date_form, **kwargs):
         raise Http404
+
 
 class DomainNameGroupView(View):
     def get(self, request, name, group_id, url_subdir='', **kwargs):
@@ -163,15 +179,19 @@ class DomainNameGroupView(View):
     def _get(self, request, name_obj, timestamp, url_subdir, date_form, **kwargs):
         raise Http404
 
+
 class DomainNameDetailMixin(object):
-    def _get(self, request, name_obj, timestamp, url_subdir, date_form):
+    def _get(self, request, name_obj, timestamp, url_subdir, date_form) -> HttpResponse:
         return HttpResponseRedirect('dnssec/')
+
 
 class DomainNameDetailView(DomainNameDetailMixin, DomainNameView):
     pass
 
+
 class DomainNameDetailGroupView(DomainNameDetailMixin, DomainNameGroupView):
     pass
+
 
 class DNSSECMixin(object):
     def _graph_dane_related_name(self, G, name_obj, trusted_keys, rdtypes, denial_of_existence):
@@ -344,7 +364,7 @@ class DomainNameDNSSECGraphMixin(DNSSECMixin):
             content_type = 'image/svg+xml'
         elif format == 'js':
             content_type = 'application/javascript'
-            img += notices_to_javascript(get_notices(G.node_info))
+            img += notices_to_javascript(get_notices(G.node_info)).encode('utf-8')
         else:
             raise Exception('Unknown file type!')
 
@@ -363,18 +383,22 @@ class DomainNameDNSSECGraphMixin(DNSSECMixin):
 
         return response
 
+
 class DomainNameDNSSECGraphView(DomainNameDNSSECGraphMixin, DomainNameSimpleView):
     pass
+
 
 class DomainNameDNSSECGraphGroupView(DomainNameDNSSECGraphMixin, DomainNameGroupView):
     pass
 
+
 class DynamicDomainNameDetailView(View):
-    def get(self, request, name, url_subdir='', **kwargs):
+    def get(self, request, name, url_subdir='', **kwargs) -> HttpResponse:
         return HttpResponseRedirect('dnssec/')
 
+
 class DynamicDomainNameDNSSECPage(View):
-    def get(self, request, name, url_subdir='', **kwargs):
+    def get(self, request, name, url_subdir='', **kwargs) -> HttpResponse:
         name = util.name_url_decode(name)
         if name is None:
             # name is invalid
@@ -384,7 +408,7 @@ class DynamicDomainNameDNSSECPage(View):
         options_form, values = get_dnssec_options_form_data(request.GET)
 
         name_obj = _OfflineDomainNameAnalysis(name)
-        name_obj.analysis_end = datetime.datetime.now(fmt.utc).replace(microsecond=0)
+        name_obj.analysis_end = datetime.now(fmt.utc).replace(microsecond=0)
         name_obj.base_url_with_timestamp = '../'
         name_obj.previous = None
         template = 'dnssec.html'
@@ -397,6 +421,7 @@ class DynamicDomainNameDNSSECPage(View):
                 { 'name_obj': name_obj, 'analyzed_name_obj': analyzed_name_obj, 'url_subdir': url_subdir, 'title': name_obj,
                     'options_form': options_form, 'date_form': date_form,
                     'use_js': True, 'query_string': request.META['QUERY_STRING'], 'dynamic': True })
+
 
 class DynamicDomainNameDNSSECGraphView(DomainNameDNSSECGraphMixin, View):
     def get(self, request, name, url_subdir='', url_file=None, format=None, **kwargs):
@@ -418,7 +443,7 @@ class DynamicDomainNameDNSSECGraphView(DomainNameDNSSECGraphMixin, View):
 
         trusted_keys = trusted_keys_explicit
         if dns.name.root in trusted_zones:
-            trusted_keys += get_default_trusted_keys(datetime.datetime.now(fmt.utc))
+            trusted_keys += get_default_trusted_keys(datetime.now(fmt.utc))
 
         a = DynamicAnalyst(name)
         name_obj = a.analyze()
@@ -432,6 +457,7 @@ class DynamicDomainNameDNSSECGraphView(DomainNameDNSSECGraphMixin, View):
             return self.dnssec_auth_graph(request, name_obj, G, format)
         else:
             raise Http404
+
 
 class DomainNameResponsesMixin(object):
     def _get(self, request, name_obj, timestamp, url_subdir, date_form):
@@ -469,11 +495,11 @@ class DomainNameResponsesMixin(object):
             qrrsets.insert(0, (zone_obj, zone_obj.name, dns.rdatatype.DS))
             parent_all_auth_servers = zone_obj.parent.get_auth_or_designated_servers()
             parent_server_list = [(ip, zone_obj.parent.get_ns_name_for_ip(ip)[0]) for ip in parent_all_auth_servers]
-            parent_server_list.sort(cmp=util.ip_name_cmp)
+            parent_server_list.sort(key=functools.cmp_to_key(util.ip_name_cmp))
 
         all_auth_servers = zone_obj.get_auth_or_designated_servers()
         server_list = [(ip, zone_obj.get_ns_name_for_ip(ip)[0]) for ip in all_auth_servers]
-        server_list.sort(cmp=util.ip_name_cmp)
+        server_list.sort(key=functools.cmp_to_key(util.ip_name_cmp))
         response_consistency = []
 
         for my_name_obj, name, rdtype in qrrsets:
@@ -549,9 +575,9 @@ class DomainNameResponsesMixin(object):
                     row.append(('<div class="rr">%s</div>' % rrsig.to_text(), 'not-styled', None, None, None))
 
                     try:
-                        status = filter(lambda x: x.signature_valid == True, my_name_obj.rrsig_status[rrset_info][rrsig].values())[0]
+                        status = list(filter(lambda x: x.signature_valid == True, my_name_obj.rrsig_status[rrset_info][rrsig].values()))[0]
                     except IndexError:
-                        status = my_name_obj.rrsig_status[rrset_info][rrsig].values()[0]
+                        status = list(my_name_obj.rrsig_status[rrset_info][rrsig].values())[0]
 
                     style = Status.rrsig_status_mapping[status.validation_status]
                     row.append((Status.rrsig_status_mapping[status.validation_status], style, None, None, None))
@@ -576,7 +602,7 @@ class DomainNameResponsesMixin(object):
                 for q in query.queries.values():
                     if server in q.responses:
                         server_queried = True
-                        r = q.responses[server].values()[0]
+                        r = list(q.responses[server].values())[0]
                         if r.is_complete_response():
                             response = r
                             break
@@ -607,7 +633,7 @@ class DomainNameResponsesMixin(object):
                 for q in query.queries.values():
                     if server in q.responses:
                         server_queried = True
-                        r = q.responses[server].values()[0]
+                        r = list(q.responses[server].values())[0]
                         if r.is_complete_response():
                             response = r
                             break
@@ -630,7 +656,7 @@ class DomainNameResponsesMixin(object):
                 for q in query.queries.values():
                     if server in q.responses:
                         server_queried = True
-                        r = q.responses[server].values()[0]
+                        r = list(q.responses[server].values())[0]
                         if r.is_complete_response():
                             response = r
                             break
@@ -674,7 +700,7 @@ class DomainNameServersMixin(object):
         delegation_matrix = []
 
         def stealth_cmp(x, y):
-            return cmp((y[0], x[1], x[2]), (x[0], y[1], y[2]))
+            return util.cmp((y[0], x[1], x[2]), (x[0], y[1], y[2]))
 
         all_names_list = list(zone_obj.get_ns_names())
         if not all_names_list:
@@ -708,9 +734,9 @@ class DomainNameServersMixin(object):
                 glue_mapping = zone_obj.get_glue_ip_mapping()
                 parent_status['in_parent'] = name in glue_mapping
                 glue_ips_v4 = filter(lambda x: x.version == 4, glue_mapping.get(name, set()))
-                glue_ips_v4.sort()
+                glue_ips_v4 = sorted(glue_ips_v4)
                 glue_ips_v6 = filter(lambda x: x.version == 6, glue_mapping.get(name, set()))
-                glue_ips_v6.sort()
+                glue_ips_v6 = sorted(glue_ips_v6)
             else:
                 glue_ips_v4 = []
                 glue_ips_v6 = []
@@ -734,9 +760,9 @@ class DomainNameServersMixin(object):
 
             auth_mapping = zone_obj.get_auth_ns_ip_mapping()
             auth_ips_v4 = filter(lambda x: x.version == 4, auth_mapping.get(name, set()))
-            auth_ips_v4.sort()
+            auth_ips_v4 = sorted(auth_ips_v4)
             auth_ips_v6 = filter(lambda x: x.version == 6, auth_mapping.get(name, set()))
-            auth_ips_v6.sort()
+            auth_ips_v6 = sorted(auth_ips_v6)
 
             row.append({ 'in_child': in_child, 'auth_ips_v4': auth_ips_v4, 'auth_ips_v6': auth_ips_v6 })
             delegation_matrix.append(row)
@@ -746,7 +772,7 @@ class DomainNameServersMixin(object):
         for server in zone_obj.get_stealth_servers():
             names, ancestor_zone = zone_obj.get_ns_name_for_ip(server)
             stealth_rows.append((ancestor_zone, names, server))
-        stealth_rows.sort(cmp=stealth_cmp)
+        stealth_rows.sort(key=functools.cmp_to_key(stealth_cmp))
 
         for ancestor_zone, names, server in stealth_rows:
             names = map(fmt.humanize_name, names)
@@ -856,8 +882,8 @@ def domain_search(request):
         name_valid = False
 
     # even an valid name might not fit our (current) URL criteria
-    name_re = re.compile(r'^(%s)$' % urls.dns_name)
-    if name_re.match(urllib.unquote(name)) is None:
+    name_re = re.compile(r'^(%s)$' % urls.dns_name)    
+    if name_re.match(urllib.parse.unquote(str(name))) is None:
         name_valid = False
 
     if not name_valid:
@@ -865,6 +891,7 @@ def domain_search(request):
                 { 'domain_name': name, 'title': 'Search' })
 
     return HttpResponseRedirect('../d/%s/' % name)
+
 
 def _set_mappings(domain, mappings):
     explicit_delegation = {}
@@ -884,8 +911,9 @@ def _set_mappings(domain, mappings):
         explicit_delegation[(n, a_rdtype)].add(rdtype_cls(dns.rdataclass.IN, a_rdtype, str(addr)))
     return explicit_delegation
 
+
 @csrf_exempt
-def analyze(request, name, url_subdir=None):
+def analyze(request: HttpRequest, name: str, url_subdir: t.Optional[str] = None) -> t.Union[HttpResponse, StreamingHttpResponse]:
     name = util.name_url_decode(name)
     if name is None:
         # name is invalid
@@ -966,12 +994,12 @@ def analyze(request, name, url_subdir=None):
 
             edns_diagnostics = analyze_form.cleaned_data['edns_diagnostics']
             stop_at_explicit = { force_ancestor: True }
-            start_time = datetime.datetime.now(fmt.utc).replace(microsecond=0)
+            start_time = datetime.now(fmt.utc).replace(microsecond=0)
 
             # for ajax requests, analyze asynchronously, using a logger with
             # callbacks and streaming output to the browser.  If there is an
             # error with the analysis, it will be handled by the javascript.
-            if request.is_ajax():
+            if is_ajax(request):
                 a = analyst_cls(name_obj.name, logger=analysis_logger.logger, query_class_mixin=query_class_mixin, edns_diagnostics=edns_diagnostics, stop_at_explicit=stop_at_explicit, explicit_delegations=explicit_delegations, extra_rdtypes=extra_rdtypes, th_factories=th_factories, start_time=start_time, force_ancestor=force_ancestor, force_group=force_group)
                 a.analyze_async(success_callback, exc_callback)
                 #TODO set alarm here for too long waits
@@ -1000,7 +1028,7 @@ def analyze(request, name, url_subdir=None):
         # if the form contents were invalid in an ajax request, then send a
         # critical-level error, which will prompt the browser to re-issue a
         # POST, so the errors are seen.
-        elif request.is_ajax():
+        elif is_ajax(request):
             analysis_logger.logger.critical('Form error')
             analysis_logger.close()
             return StreamingHttpResponse(analysis_logger.handler, content_type='application/json')
@@ -1013,12 +1041,14 @@ def analyze(request, name, url_subdir=None):
             { 'name_obj': name_obj, 'url_subdir': url_subdir, 'title': name_obj,
                 'error_msg': error_msg, 'analyze_form': analyze_form })
 
+
 def contact(request):
     if request.method == 'POST':
         form = ContactForm(request.POST)
-        if form.is_valid() and \
-                (not hasattr(settings, 'CAPTCHA_SECRET') or \
-                        util.validate_captcha(request.POST.get('g-recaptcha-response', ''))):
+        if form.is_valid() and (
+            hasattr(settings, 'CAPTCHA_SECRET')
+            or util.validate_captcha(request.POST.get('g-recaptcha-response', ''))
+        ):
             form.submit_message()
             return HttpResponseRedirect('/message_submitted/')
     else:
