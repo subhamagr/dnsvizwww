@@ -107,7 +107,7 @@ class DNSServer(models.Model):
 
 class NSMapping(models.Model):
     name = fields.DomainNameField(max_length=2048)
-    server = models.ForeignKey(DNSServer)
+    server = models.ForeignKey(DNSServer, on_delete=models.CASCADE)
 
     class Meta:
         unique_together = (('name', 'server'),)
@@ -216,7 +216,7 @@ class OnlineDomainNameAnalysis(dnsviz.analysis.OfflineDomainNameAnalysis, models
     referral_rdtype = fields.UnsignedSmallIntegerField(blank=True, null=True)
     auth_rdtype = fields.UnsignedSmallIntegerField(blank=True, null=True)
     cookie_rdtype = fields.UnsignedSmallIntegerField(blank=True, null=True)
-    group = models.ForeignKey('self', blank=True, null=True)
+    group = models.ForeignKey('self', blank=True, null=True, on_delete=models.CASCADE)
 
     nxdomain_name = fields.DomainNameField(max_length=2048, canonicalize=False, blank=True, null=True)
     nxdomain_rdtype = fields.UnsignedSmallIntegerField(blank=True, null=True)
@@ -1091,15 +1091,15 @@ class DNSQuery(models.Model):
     rdclass = fields.UnsignedSmallIntegerField()
     response_options = fields.UnsignedSmallIntegerField(default=0)
 
-    options = models.ForeignKey(DNSQueryOptions, related_name='queries')
-    analysis = models.ForeignKey(OnlineDomainNameAnalysis, related_name='queries_db')
+    options = models.ForeignKey(DNSQueryOptions, related_name='queries', on_delete=models.CASCADE)
+    analysis = models.ForeignKey(OnlineDomainNameAnalysis, related_name='queries_db', on_delete=models.CASCADE)
 
     version = models.PositiveSmallIntegerField(default=3)
 
 class DNSResponse(models.Model):
     SECTIONS = { 'QUESTION': 0, 'ANSWER': 1, 'AUTHORITY': 2, 'ADDITIONAL': 3 }
 
-    query = models.ForeignKey(DNSQuery, related_name='responses')
+    query = models.ForeignKey(DNSQuery, related_name='responses', on_delete=models.CASCADE)
 
     # network parameters
     server = models.GenericIPAddressField()
@@ -1256,7 +1256,7 @@ class DNSResponse(models.Model):
                     (otype, olen) = struct.unpack('!HH', self.edns_options[index:index + 4])
                     index += 4
                     opt = dns.edns.option_from_wire(otype, self.edns_options, index, olen)
-                    options.append( opt)
+                    options.append(opt)
                     index += olen
 
                 self._message.use_edns(self.edns_flags>>16, self.edns_flags, self.edns_max_udp_payload, 65536, options=options)
@@ -1268,12 +1268,12 @@ class DNSResponse(models.Model):
     message = property(_get_message, _set_message)
 
 class ResourceRecordMapper(models.Model):
-    message = models.ForeignKey(DNSResponse, related_name='rr_mappings')
+    message = models.ForeignKey(DNSResponse, related_name='rr_mappings', on_delete=models.CASCADE)
     section = models.PositiveSmallIntegerField()
 
     order = models.PositiveSmallIntegerField()
     raw_name = fields.DomainNameField(max_length=2048, canonicalize=False, blank=True, null=True)
-    rdata = models.ForeignKey(ResourceRecord)
+    rdata = models.ForeignKey(ResourceRecord, on_delete=models.CASCADE)
     ttl = fields.UnsignedIntegerField()
 
     class Meta:
